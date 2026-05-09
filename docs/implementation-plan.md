@@ -2,31 +2,33 @@
 
 ## 1. Project scaffold
 
-- Create a Node.js and TypeScript MCP server.
-- Add build, start, and development scripts.
-- Add Railway-compatible HTTP server entrypoint.
-- Add `.env.example` for required secrets.
+- [x] Create a Node.js and TypeScript MCP server.
+- [x] Add build, start, and development scripts.
+- [x] Add Railway-compatible HTTP server entrypoint.
+- [x] Add `.env.example` for required secrets.
 
 ## 2. Claude connector endpoint
 
-- Expose the MCP server over Streamable HTTP.
-- Use `/mcp` as the primary endpoint.
-- Add a simple `/health` endpoint for Railway checks.
-- Require bearer authentication before MCP requests are handled.
+- [x] Expose the MCP server over Streamable HTTP.
+- [x] Use `/mcp` as the primary endpoint.
+- [x] Add a simple `/health` endpoint for Railway checks.
+- [x] Require bearer authentication before MCP requests are handled when `MCP_AUTH_TOKEN` is set.
 
 ## 3. Unleashed API client
 
-- Read `UNLEASHED_API_ID` and `UNLEASHED_API_KEY` from environment variables.
-- Sign requests with Unleashed `api-auth-signature`.
-- Centralize request timeout, pagination, and error handling.
-- Keep logs free of API keys, signatures, and private customer details.
+- [x] Read `UNLEASHED_API_ID` and `UNLEASHED_API_KEY` from environment variables.
+- [x] Sign requests with Unleashed `api-auth-signature`.
+- [x] Centralize request timeout and error handling.
+- [x] Keep logs free of API keys, signatures, and private customer details.
+- [ ] Confirm each approved endpoint's exact Unleashed query parameters against the spreadsheet.
 
 ## 4. Read-only tool allowlist
 
-- Implement only approved read-only tools from the review matrix.
-- Keep tool names specific and business-friendly.
-- Validate input schemas before calling Unleashed.
-- Return concise summaries with raw IDs only when useful.
+- [x] Implement initial read-only tools for customers, products, and sales orders.
+- [x] Keep tool names specific and business-friendly.
+- [x] Validate input schemas before calling Unleashed.
+- [ ] Add the remaining approved read-only tools from the review matrix.
+- [ ] Tune response summaries after testing against live Unleashed data.
 
 ## 5. Customer data policy
 
@@ -36,10 +38,11 @@
 
 ## 6. Railway deployment
 
-- Connect Railway to `PerfectTed/unleashed-claude-mcp`.
-- Set required environment variables in Railway.
-- Deploy from the main branch.
-- Use the Railway public domain as the Claude connector URL.
+- [ ] Connect Railway to `PerfectTed/unleashed-claude-mcp` after a PerfectTed org owner installs the Railway GitHub App.
+- [ ] For early testing, connect Railway to `tec-ted/unleashed-claude-mcp-personal`.
+- [ ] Set required environment variables in Railway.
+- [ ] Deploy from the main branch.
+- [ ] Use the Railway public domain as the Claude connector URL.
 
 ## 7. Acceptance checks
 
@@ -48,4 +51,3 @@
 - Approved read-only tools return expected Unleashed data.
 - Non-approved operations are unavailable.
 - Logs do not contain tokens, API keys, signatures, or unnecessary PII.
-
