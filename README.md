@@ -36,9 +36,10 @@ Set these variables in Railway:
 ```env
 UNLEASHED_API_ID=
 UNLEASHED_API_KEY=
-MCP_AUTH_TOKEN=
 NODE_ENV=production
 ```
+
+`MCP_AUTH_TOKEN` is supported for clients that can send an `Authorization: Bearer ...` header. For Claude custom connector testing, leave it unset unless an OAuth layer or proxy is added, because Claude's connector setup accepts a remote MCP URL and optional OAuth client settings rather than a static bearer token.
 
 After deploy, use the public Railway URL as the Claude connector endpoint:
 
@@ -50,7 +51,7 @@ https://your-service.up.railway.app/mcp
 
 - Read-only tools only
 - Explicit Unleashed endpoint allowlist
-- Bearer token protection for the MCP endpoint
+- Optional bearer token protection for clients that support custom auth headers
 - Secrets stored in Railway environment variables
 - No raw secret values in logs
 
