@@ -1,6 +1,6 @@
 # Unleashed Claude MCP
 
-Read-only Claude MCP connector for approved Unleashed API access, deployable on Railway.
+Read-only Claude MCP connector for approved Unleashed API access, deployable on Railway
 
 ## Goal
 
