@@ -39,7 +39,11 @@ UNLEASHED_API_KEY=
 NODE_ENV=production
 ```
 
-`MCP_AUTH_TOKEN` is supported for clients that can send an `Authorization: Bearer ...` header. For Claude custom connector testing, leave it unset unless an OAuth layer or proxy is added, because Claude's connector setup accepts a remote MCP URL and optional OAuth client settings rather than a static bearer token.
+`MCP_AUTH_TOKEN` is supported for clients that can send an `Authorization: Bearer ...` header or `x-api-key` header. Claude.ai custom connectors cannot send custom headers from the URL field, so use the query parameter form when this variable is set:
+
+```text
+https://your-service.up.railway.app/mcp?api_key=YOUR_MCP_AUTH_TOKEN
+```
 
 After deploy, use the public Railway URL as the Claude connector endpoint:
 

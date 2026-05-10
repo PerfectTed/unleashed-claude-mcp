@@ -125,7 +125,14 @@ function requireMcpAuth(request: Request, response: Response, next: () => void) 
   }
 
   const expected = `Bearer ${config.mcpAuthToken}`;
-  if (request.header("authorization") !== expected) {
+  const queryApiKey = typeof request.query.api_key === "string" ? request.query.api_key : undefined;
+  const headerApiKey = request.header("x-api-key");
+
+  if (
+    request.header("authorization") !== expected &&
+    headerApiKey !== config.mcpAuthToken &&
+    queryApiKey !== config.mcpAuthToken
+  ) {
     response.status(401).json({ error: "Unauthorized." });
     return;
   }
