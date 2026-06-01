@@ -6,8 +6,9 @@ import { UnleashedClient } from "./unleashedClient.js";
 const PAGE_NUMBER = z.number().int().positive().max(10_000).default(1);
 const PAGE_SIZE = z.number().int().positive().max(200).default(50);
 const GUID = z.string().trim().uuid();
-const OPTIONAL_DATE = z.string().trim().optional();
+const OPTIONAL_DATE = z.string().trim().nullish().transform((value) => value ?? undefined);
 const REPORT_DATE = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/);
+const OPTIONAL_REPORT_DATE = REPORT_DATE.nullish().transform((value) => value ?? undefined);
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -278,8 +279,8 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
       inputSchema: {
         startDate: REPORT_DATE,
         endDate: REPORT_DATE,
-        comparisonStartDate: REPORT_DATE.optional(),
-        comparisonEndDate: REPORT_DATE.optional(),
+        comparisonStartDate: OPTIONAL_REPORT_DATE,
+        comparisonEndDate: OPTIONAL_REPORT_DATE,
         orderStatus: z.string().trim().default("Completed"),
         topLimit: z.number().int().positive().max(10).default(5)
       }
