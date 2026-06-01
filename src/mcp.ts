@@ -3,12 +3,41 @@ import { z } from "zod";
 import { sanitizeCustomer, sanitizeCustomerCollection } from "./sanitize.js";
 import { UnleashedClient } from "./unleashedClient.js";
 
-const PAGE_NUMBER = z.number().int().positive().max(10_000).default(1);
-const PAGE_SIZE = z.number().int().positive().max(200).default(50);
+const PAGE_NUMBER = z.number().int().positive().max(10_000).default(1).describe("Page number to retrieve (1-based). Defaults to 1.");
+const PAGE_SIZE = z.number().int().positive().max(200).default(50).describe("Results per page. Default 50, maximum 200. Use pageNumber to page through more.");
 const GUID = z.string().trim().uuid();
 const OPTIONAL_DATE = z.string().trim().nullish().transform((value) => value ?? undefined);
 const REPORT_DATE = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/);
 const OPTIONAL_REPORT_DATE = REPORT_DATE.nullish().transform((value) => value ?? undefined);
+
+const SALES_ORDERS_NEEDS_FILTER = {
+  status: "needs_filter",
+  message:
+    "No narrowing filter was provided, so this query would scan the entire sales-order history and could return thousands of rows (result ordering is not guaranteed, so paging would not give you a useful slice). Add at least one filter before retrying.",
+  howToProceed: [
+    "Add a date range: startDate and/or endDate in YYYY-MM-DD format (e.g. startDate: \"2026-01-01\", endDate: \"2026-01-31\"). Omit either bound to leave that side unbounded — never pass null.",
+    "Or filter by a single customer: customerCode (e.g. \"TESCO\").",
+    "Or filter by status: orderStatus (e.g. \"Completed\", \"Parked\", \"Placed\").",
+    "Or look up one order directly: orderNumber.",
+    "For aggregated revenue/margin analysis over a range, use unleashed_sales_performance_report instead of this tool."
+  ],
+  proceedAnyway:
+    "If you genuinely intend to fetch the unfiltered result set, retry this tool with confirmUnbounded: true."
+} as const;
+
+const PURCHASE_ORDERS_NEEDS_FILTER = {
+  status: "needs_filter",
+  message:
+    "No narrowing filter was provided, so this query would scan the entire purchase-order history and could return thousands of rows (result ordering is not guaranteed, so paging would not give you a useful slice). Add at least one filter before retrying.",
+  howToProceed: [
+    "Add a date range: startDate and/or endDate in YYYY-MM-DD format (e.g. startDate: \"2026-01-01\", endDate: \"2026-01-31\"). Omit either bound to leave that side unbounded — never pass null.",
+    "Or filter by a single supplier: supplierCode.",
+    "Or filter by status: orderStatus (e.g. \"Completed\", \"Parked\", \"Placed\").",
+    "Or look up one order directly: orderNumber."
+  ],
+  proceedAnyway:
+    "If you genuinely intend to fetch the unfiltered result set, retry this tool with confirmUnbounded: true."
+} as const;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -149,8 +178,8 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         customerCode: z.string().trim().optional(),
         productCode: z.string().trim().optional(),
         productGroupPrices: z.string().trim().optional(),
-        asAtDate: OPTIONAL_DATE,
-        modifiedSince: OPTIONAL_DATE
+        asAtDate: OPTIONAL_DATE.describe("Point-in-time snapshot date, format YYYY-MM-DD (e.g. 2026-03-01). Returns values as they stood on this date. Do NOT pass null — omit the field to use the current state."),
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Do NOT pass null — omit the field to disable this filter.")
       }
     },
     async ({ pageNumber, pageSize, customerCode, productCode, productGroupPrices, asAtDate, modifiedSince }) => {
@@ -195,8 +224,8 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         productId: z.string().trim().optional(),
         warehouseCode: z.string().trim().optional(),
         warehouseName: z.string().trim().optional(),
-        asAtDate: OPTIONAL_DATE,
-        modifiedSince: OPTIONAL_DATE,
+        asAtDate: OPTIONAL_DATE.describe("Point-in-time snapshot date, format YYYY-MM-DD (e.g. 2026-03-01). Returns values as they stood on this date. Do NOT pass null — omit the field to use the current state."),
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Do NOT pass null — omit the field to disable this filter."),
         isAssembled: z.boolean().optional(),
         orderBy: z.string().trim().optional()
       }
@@ -239,7 +268,7 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
     "unleashed_list_sales_orders",
     {
       title: "List Unleashed sales orders",
-      description: "Read-only search for Unleashed sales orders.",
+      description: "Read-only search for Unleashed sales orders. WARNING: the full sales-order history is large and result ordering is not guaranteed — without filters this can return thousands of unhelpful rows. Prefer to narrow by a date range (startDate and/or endDate in YYYY-MM-DD), a customerCode, an orderStatus, or an orderNumber. If you call this with no narrowing filter at all, the tool will ask you to add one (or set confirmUnbounded: true) instead of dumping everything. For aggregated revenue/margin analysis over a date range, use unleashed_sales_performance_report instead.",
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         pageNumber: PAGE_NUMBER,
@@ -248,12 +277,20 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         customerCode: z.string().trim().optional(),
         warehouseCode: z.string().trim().optional(),
         orderStatus: z.string().trim().optional(),
-        startDate: OPTIONAL_DATE,
-        endDate: OPTIONAL_DATE,
-        modifiedSince: OPTIONAL_DATE
+        startDate: OPTIONAL_DATE.describe("Lower bound on ORDER DATE, format YYYY-MM-DD (e.g. 2026-01-31). Returns orders dated on/after this date. Do NOT pass null — omit the field entirely to leave the start unbounded (no lower bound)."),
+        endDate: OPTIONAL_DATE.describe("Upper bound on ORDER DATE, format YYYY-MM-DD (e.g. 2026-02-28). Returns orders dated up to this date. Do NOT pass null — omit the field entirely to leave the end unbounded (up to today)."),
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Filters on last-modified time, not order date — use it for incremental/delta syncs. Do NOT pass null — omit the field to disable this filter."),
+        confirmUnbounded: z.boolean().default(false).describe("Set true ONLY to bypass the no-filter safety check and intentionally fetch an unfiltered, potentially very large result set. Defaults to false, which makes the tool ask for a narrowing filter when none is provided.")
       }
     },
-    async ({ pageNumber, pageSize, orderNumber, customerCode, warehouseCode, orderStatus, startDate, endDate, modifiedSince }) => {
+    async ({ pageNumber, pageSize, orderNumber, customerCode, warehouseCode, orderStatus, startDate, endDate, modifiedSince, confirmUnbounded }) => {
+      const hasNarrowingFilter =
+        Boolean(startDate) || Boolean(endDate) || Boolean(modifiedSince) ||
+        Boolean(customerCode) || Boolean(orderNumber) || Boolean(orderStatus);
+      if (!confirmUnbounded && !hasNarrowingFilter) {
+        return jsonResult(SALES_ORDERS_NEEDS_FILTER);
+      }
+
       const payload = await unleashed.get<unknown>("/SalesOrders", {
         ...pagination(pageNumber, pageSize),
         orderNumber,
@@ -380,7 +417,7 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         pageNumber: PAGE_NUMBER,
         pageSize: PAGE_SIZE,
         customerCode: z.string().trim().optional(),
-        modifiedSince: OPTIONAL_DATE
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Do NOT pass null — omit the field to disable this filter.")
       }
     },
     async ({ pageNumber, pageSize, customerCode, modifiedSince }) => {
@@ -406,7 +443,7 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         warehouseCode: z.string().trim().optional(),
         warehouseName: z.string().trim().optional(),
         includeObsolete: z.boolean().optional(),
-        modifiedSince: OPTIONAL_DATE
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Do NOT pass null — omit the field to disable this filter.")
       }
     },
     async ({ pageNumber, pageSize, warehouseCode, warehouseName, includeObsolete, modifiedSince }) => {
@@ -432,7 +469,7 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         pageNumber: PAGE_NUMBER,
         pageSize: PAGE_SIZE,
         contactEmail: z.string().trim().optional(),
-        modifiedSince: OPTIONAL_DATE
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Do NOT pass null — omit the field to disable this filter.")
       }
     },
     async ({ pageNumber, pageSize, contactEmail, modifiedSince }) => {
@@ -466,7 +503,7 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
     "unleashed_list_purchase_orders",
     {
       title: "List Unleashed purchase orders",
-      description: "Read-only search for Unleashed purchase orders.",
+      description: "Read-only search for Unleashed purchase orders. WARNING: the full purchase-order history is large and result ordering is not guaranteed — without filters this can return thousands of unhelpful rows. Prefer to narrow by a date range (startDate and/or endDate in YYYY-MM-DD), a supplierCode, an orderStatus, or an orderNumber. If you call this with no narrowing filter at all, the tool will ask you to add one (or set confirmUnbounded: true) instead of dumping everything.",
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         pageNumber: PAGE_NUMBER,
@@ -475,12 +512,20 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         supplierCode: z.string().trim().optional(),
         warehouseCode: z.string().trim().optional(),
         orderStatus: z.string().trim().optional(),
-        startDate: OPTIONAL_DATE,
-        endDate: OPTIONAL_DATE,
-        modifiedSince: OPTIONAL_DATE
+        startDate: OPTIONAL_DATE.describe("Lower bound on ORDER DATE, format YYYY-MM-DD (e.g. 2026-01-31). Returns orders dated on/after this date. Do NOT pass null — omit the field entirely to leave the start unbounded (no lower bound)."),
+        endDate: OPTIONAL_DATE.describe("Upper bound on ORDER DATE, format YYYY-MM-DD (e.g. 2026-02-28). Returns orders dated up to this date. Do NOT pass null — omit the field entirely to leave the end unbounded (up to today)."),
+        modifiedSince: OPTIONAL_DATE.describe("Return only records created or edited on/after this date, format YYYY-MM-DD (e.g. 2026-03-01). Filters on last-modified time, not order date — use it for incremental/delta syncs. Do NOT pass null — omit the field to disable this filter."),
+        confirmUnbounded: z.boolean().default(false).describe("Set true ONLY to bypass the no-filter safety check and intentionally fetch an unfiltered, potentially very large result set. Defaults to false, which makes the tool ask for a narrowing filter when none is provided.")
       }
     },
-    async ({ pageNumber, pageSize, orderNumber, supplierCode, warehouseCode, orderStatus, startDate, endDate, modifiedSince }) => {
+    async ({ pageNumber, pageSize, orderNumber, supplierCode, warehouseCode, orderStatus, startDate, endDate, modifiedSince, confirmUnbounded }) => {
+      const hasNarrowingFilter =
+        Boolean(startDate) || Boolean(endDate) || Boolean(modifiedSince) ||
+        Boolean(supplierCode) || Boolean(orderNumber) || Boolean(orderStatus);
+      if (!confirmUnbounded && !hasNarrowingFilter) {
+        return jsonResult(PURCHASE_ORDERS_NEEDS_FILTER);
+      }
+
       const payload = await unleashed.get<unknown>("/PurchaseOrders", {
         ...pagination(pageNumber, pageSize),
         orderNumber,
