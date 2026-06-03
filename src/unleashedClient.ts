@@ -25,9 +25,17 @@ export class UnleashedClient {
       throw new Error("Unleashed API credentials are not configured.");
     }
 
-    const queryString = buildQueryString(query);
+    // Unleashed paginates via a URL path segment (/SalesOrders/2), not a query param.
+    // Pull `page` out of the query: only page 2+ needs the segment (page 1 is the default),
+    // and the HMAC signature is computed over the remaining query string, which must NOT
+    // include the page number.
+    const { page, ...filters } = query;
+    const pageSegment =
+      page !== undefined && page !== null && Number(page) > 1 ? `/${Number(page)}` : "";
+
+    const queryString = buildQueryString(filters);
     const signature = createSignature(queryString, this.config.apiKey);
-    const url = `${this.config.baseUrl}${path}${queryString ? `?${queryString}` : ""}`;
+    const url = `${this.config.baseUrl}${path}${pageSegment}${queryString ? `?${queryString}` : ""}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
