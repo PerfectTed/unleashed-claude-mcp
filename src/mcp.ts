@@ -1016,15 +1016,38 @@ function pagination(pageNumber: number, pageSize: number) {
   };
 }
 
+const MAX_RESULT_CHARS = 250_000;
+
 function jsonResult(payload: unknown) {
   const text = JSON.stringify(payload, null, 2);
 
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: text.length > 50_000 ? `${text.slice(0, 50_000)}\n\n[truncated]` : text
-      }
+  if (text.length <= MAX_RESULT_CHARS) {
+    return {
+      content: [{ type: "text" as const, text }]
+    };
+  }
+
+  // Overflow: never emit a mid-structure slice (that produced unparseable JSON and
+  // silently dropped orders). Return a valid, self-describing note so the client can narrow.
+  const itemCount =
+    payload && typeof payload === "object" && Array.isArray((payload as { Items?: unknown[] }).Items)
+      ? (payload as { Items: unknown[] }).Items.length
+      : undefined;
+
+  const note = {
+    status: "response_too_large",
+    message:
+      `The result is ${text.length} characters, exceeding the ${MAX_RESULT_CHARS}-character response limit. ` +
+      "Nothing was returned rather than send a truncated, unparseable payload. Narrow the query and retry.",
+    ...(itemCount !== undefined ? { itemCount } : {}),
+    howToProceed: [
+      "Narrow the date range to a smaller startDate/endDate window.",
+      "Reduce pageSize and page through the results, or add a customerCode / orderStatus filter.",
+      "For totals or aggregates over a range, use unleashed_sales_performance_report instead of listing raw orders."
     ]
+  };
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(note, null, 2) }]
   };
 }
