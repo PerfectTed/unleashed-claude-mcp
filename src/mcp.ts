@@ -39,6 +39,17 @@ const PURCHASE_ORDERS_NEEDS_FILTER = {
     "If you genuinely intend to fetch the unfiltered result set, retry this tool with confirmUnbounded: true."
 } as const;
 
+const REPORT_NEEDS_DATE_RANGE = {
+  status: "needs_date_range",
+  message:
+    "A sales performance report requires both startDate and endDate. Provide them in YYYY-MM-DD format (e.g. startDate: \"2026-06-01\", endDate: \"2026-06-03\"). Do not pass null.",
+  howToProceed: [
+    "Set startDate and endDate to real dates in YYYY-MM-DD format.",
+    "For a single day, set both to the same date.",
+    "The range is limited to 93 days per call."
+  ]
+} as const;
+
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -314,8 +325,8 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
         "Read-only aggregated sales performance report for a date range. Uses daily date-filtered Unleashed sales-order reads instead of fragile bulk pagination.",
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
-        startDate: REPORT_DATE,
-        endDate: REPORT_DATE,
+        startDate: OPTIONAL_REPORT_DATE.describe("Start of the report date range, format YYYY-MM-DD (e.g. 2026-06-01). Required. Do NOT pass null."),
+        endDate: OPTIONAL_REPORT_DATE.describe("End of the report date range, format YYYY-MM-DD (e.g. 2026-06-03). Required. Do NOT pass null."),
         comparisonStartDate: OPTIONAL_REPORT_DATE,
         comparisonEndDate: OPTIONAL_REPORT_DATE,
         orderStatus: z.string().trim().default("Completed"),
@@ -323,6 +334,10 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
       }
     },
     async ({ startDate, endDate, comparisonStartDate, comparisonEndDate, orderStatus, topLimit }) => {
+      if (!startDate || !endDate) {
+        return jsonResult(REPORT_NEEDS_DATE_RANGE);
+      }
+
       const primaryOrders = await fetchSalesOrdersByDay(unleashed, startDate, endDate, orderStatus);
       const primary = summarizeSalesOrders(primaryOrders.orders, startDate, endDate, topLimit);
 
