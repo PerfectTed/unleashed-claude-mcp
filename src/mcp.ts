@@ -57,7 +57,24 @@ const READ_ONLY_ANNOTATIONS = {
   openWorldHint: true
 };
 
-export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer {
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true
+};
+
+const MONEY = z.number().finite().min(0);
+const DISCOUNT_RATE = z.number().finite().min(0).max(1).default(0);
+
+export type UnleashedMcpOptions = {
+  writeToolsEnabled?: boolean;
+};
+
+export function createUnleashedMcpServer(
+  unleashed: UnleashedClient,
+  options: UnleashedMcpOptions = {}
+): McpServer {
   const server = new McpServer({
     name: "unleashed-claude-mcp",
     version: "0.1.0"
@@ -591,7 +608,167 @@ export function createUnleashedMcpServer(unleashed: UnleashedClient): McpServer 
     }
   );
 
+  registerPurchaseOrderWriteTool(server, unleashed, options);
+
   return server;
+}
+
+const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
+  dryRun: z.boolean().default(true),
+  confirmUpload: z.boolean().default(false),
+  purchaseOrderGuid: GUID.optional(),
+  supplierCode: z.string().trim().min(1).max(500),
+  warehouseCode: z.string().trim().min(1).max(15),
+  orderStatus: z.enum(["Parked", "Placed"]).default("Parked"),
+  orderDate: OPTIONAL_DATE,
+  deliveryDate: OPTIONAL_DATE,
+  supplierRef: z.string().trim().max(500).optional(),
+  comments: z.string().trim().max(1024).optional(),
+  currencyCode: z.string().trim().length(3).optional(),
+  taxCode: z.string().trim().max(25).optional(),
+  taxRate: z.number().finite().min(0).optional(),
+  discountRate: DISCOUNT_RATE,
+  lines: z.array(
+    z.object({
+      productCode: z.string().trim().min(1).max(100),
+      orderQuantity: z.number().finite().positive(),
+      unitPrice: MONEY,
+      lineTax: MONEY.default(0),
+      lineTotal: MONEY.optional(),
+      deliveryDate: OPTIONAL_DATE,
+      comments: z.string().trim().max(1024).optional(),
+      discountRate: DISCOUNT_RATE,
+      unitOfMeasureName: z.string().trim().max(20).optional()
+    })
+  ).min(1)
+};
+
+type CreatePurchaseOrderInput = z.output<z.ZodObject<typeof CREATE_PURCHASE_ORDER_INPUT_SCHEMA>>;
+
+type PurchaseOrderPayload = {
+  Guid?: string;
+  Supplier: { SupplierCode: string };
+  Warehouse: { WarehouseCode: string };
+  OrderStatus: "Parked" | "Placed";
+  SubTotal: number;
+  TaxTotal: number;
+  Total: number;
+  DiscountRate: number;
+  PurchaseOrderLines: PurchaseOrderPayloadLine[];
+  OrderDate?: string;
+  DeliveryDate?: string;
+  SupplierRef?: string;
+  Comments?: string;
+  Currency?: { CurrencyCode: string };
+  TaxCode?: string;
+  TaxRate?: number;
+};
+
+type PurchaseOrderPayloadLine = {
+  LineNumber: number;
+  Product: { ProductCode: string };
+  OrderQuantity: number;
+  UnitPrice: number;
+  LineTotal: number;
+  LineTax: number;
+  DiscountRate: number;
+  DeliveryDate?: string;
+  Comments?: string;
+  UnitOfMeasure?: { Name: string };
+};
+
+function registerPurchaseOrderWriteTool(
+  server: McpServer,
+  unleashed: UnleashedClient,
+  options: UnleashedMcpOptions
+) {
+  server.registerTool(
+    "unleashed_create_purchase_order",
+    {
+      title: "Upload Unleashed purchase order",
+      description:
+        "Write-scoped creation of one Unleashed purchase order. Defaults to dry-run and Parked status for safe review before upload.",
+      annotations: WRITE_ANNOTATIONS,
+      inputSchema: CREATE_PURCHASE_ORDER_INPUT_SCHEMA
+    },
+    async (input) => {
+      const payload = buildPurchaseOrderPayload(input);
+
+      if (input.dryRun) {
+        return jsonResult({
+          dryRun: true,
+          uploadReady: true,
+          writeToolsEnabled: Boolean(options.writeToolsEnabled),
+          endpoint: purchaseOrderCreatePath(input.purchaseOrderGuid),
+          payload
+        });
+      }
+
+      if (!options.writeToolsEnabled) {
+        throw new Error("Purchase order uploads are disabled. Set UNLEASHED_ENABLE_WRITE_TOOLS=true to enable.");
+      }
+
+      if (!input.confirmUpload) {
+        throw new Error("Set confirmUpload=true after reviewing a dry-run payload before uploading.");
+      }
+
+      const result = await unleashed.post<unknown>(purchaseOrderCreatePath(input.purchaseOrderGuid), payload);
+      return jsonResult({
+        uploaded: true,
+        endpoint: purchaseOrderCreatePath(input.purchaseOrderGuid),
+        purchaseOrder: result
+      });
+    }
+  );
+}
+
+function buildPurchaseOrderPayload(input: CreatePurchaseOrderInput): PurchaseOrderPayload {
+  const lines = input.lines.map((line, index) => buildPurchaseOrderLine(line, index + 1));
+  const subTotal = round2(lines.reduce((sum, line) => sum + line.LineTotal, 0));
+  const taxTotal = round2(lines.reduce((sum, line) => sum + line.LineTax, 0));
+
+  return omitUndefined({
+    Guid: input.purchaseOrderGuid,
+    Supplier: { SupplierCode: input.supplierCode },
+    Warehouse: { WarehouseCode: input.warehouseCode },
+    OrderStatus: input.orderStatus,
+    OrderDate: input.orderDate,
+    DeliveryDate: input.deliveryDate,
+    SupplierRef: input.supplierRef,
+    Comments: input.comments,
+    Currency: input.currencyCode ? { CurrencyCode: input.currencyCode } : undefined,
+    TaxCode: input.taxCode,
+    TaxRate: input.taxRate,
+    DiscountRate: input.discountRate,
+    SubTotal: subTotal,
+    TaxTotal: taxTotal,
+    Total: round2(subTotal + taxTotal),
+    PurchaseOrderLines: lines
+  });
+}
+
+function buildPurchaseOrderLine(
+  line: CreatePurchaseOrderInput["lines"][number],
+  lineNumber: number
+): PurchaseOrderPayloadLine {
+  const lineTotal = line.lineTotal ?? line.orderQuantity * line.unitPrice * (1 - line.discountRate);
+
+  return omitUndefined({
+    LineNumber: lineNumber,
+    Product: { ProductCode: line.productCode },
+    OrderQuantity: line.orderQuantity,
+    UnitPrice: line.unitPrice,
+    LineTotal: round2(lineTotal),
+    LineTax: round2(line.lineTax),
+    DiscountRate: line.discountRate,
+    DeliveryDate: line.deliveryDate,
+    Comments: line.comments,
+    UnitOfMeasure: line.unitOfMeasureName ? { Name: line.unitOfMeasureName } : undefined
+  });
+}
+
+function purchaseOrderCreatePath(purchaseOrderGuid: string | undefined): string {
+  return purchaseOrderGuid ? `/PurchaseOrders/${encodeURIComponent(purchaseOrderGuid)}` : "/PurchaseOrders";
 }
 
 type UnleashedListResponse<T> = {
@@ -992,6 +1169,10 @@ function formatUnleashedDate(value: string | undefined): string | undefined {
 
 function numeric(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function omitUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }
 
 function round2(value: number): number {

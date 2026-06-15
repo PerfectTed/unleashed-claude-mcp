@@ -21,6 +21,19 @@ export class UnleashedClient {
   }
 
   async get<T>(path: string, query: QueryParams = {}): Promise<T> {
+    return this.request<T>("GET", path, query);
+  }
+
+  async post<T>(path: string, body: unknown, query: QueryParams = {}): Promise<T> {
+    return this.request<T>("POST", path, query, body);
+  }
+
+  private async request<T>(
+    method: "GET" | "POST",
+    path: string,
+    query: QueryParams = {},
+    body?: unknown
+  ): Promise<T> {
     if (!this.config.apiId || !this.config.apiKey) {
       throw new Error("Unleashed API credentials are not configured.");
     }
@@ -41,7 +54,7 @@ export class UnleashedClient {
 
     try {
       const response = await fetch(url, {
-        method: "GET",
+        method,
         signal: controller.signal,
         headers: {
           Accept: "application/json",
@@ -49,7 +62,8 @@ export class UnleashedClient {
           "api-auth-id": this.config.apiId,
           "api-auth-signature": signature,
           "client-type": this.config.clientType
-        }
+        },
+        body: body === undefined ? undefined : JSON.stringify(body)
       });
 
       const text = await response.text();

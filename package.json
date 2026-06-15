@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "check": "npm run build",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js"
   },

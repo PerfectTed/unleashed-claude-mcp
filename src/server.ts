@@ -22,6 +22,7 @@ app.get("/health", (_request, response) => {
   response.json({
     ok: true,
     service: "unleashed-claude-mcp",
+    writeToolsEnabled: config.writeToolsEnabled,
     unleashedConfigured: Boolean(config.unleashed.apiId && config.unleashed.apiKey)
   });
 });
@@ -80,7 +81,9 @@ async function getOrCreateTransport(
     return undefined;
   }
 
-  const server = createUnleashedMcpServer(unleashed);
+  const server = createUnleashedMcpServer(unleashed, {
+    writeToolsEnabled: config.writeToolsEnabled
+  });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newSessionId) => {

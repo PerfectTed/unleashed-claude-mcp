@@ -1,10 +1,10 @@
 # Unleashed Claude MCP
 
-Read-only Claude MCP connector for approved Unleashed API access, deployable on Railway
+Claude MCP connector for approved Unleashed API access, deployable on Railway.
 
 ## Goal
 
-Expose a small, approved set of read-only Unleashed API calls to Claude as a remote MCP connector.
+Expose a small, approved set of Unleashed API calls to Claude as a remote MCP connector.
 
 ## Hosting
 
@@ -36,6 +36,7 @@ Set these variables in Railway:
 ```env
 UNLEASHED_API_ID=
 UNLEASHED_API_KEY=
+UNLEASHED_ENABLE_WRITE_TOOLS=false
 NODE_ENV=production
 ```
 
@@ -53,11 +54,24 @@ https://your-service.up.railway.app/mcp
 
 ## Security
 
-- Read-only tools only
+- Read tools plus one guarded purchase order upload tool
 - Explicit Unleashed endpoint allowlist
+- Write tools are disabled unless `UNLEASHED_ENABLE_WRITE_TOOLS=true`
+- Purchase order upload requires a dry-run review and explicit `confirmUpload=true`
 - Optional bearer token protection for clients that support custom auth headers
 - Secrets stored in Railway environment variables
 - No raw secret values in logs
+
+## Write scope
+
+Purchase order upload is the only write tool currently exposed.
+
+- Tool: `unleashed_create_purchase_order`
+- Endpoint: `POST /PurchaseOrders` or `POST /PurchaseOrders/{purchaseOrderGuid}`
+- Default behavior: dry-run only
+- Required for live upload: `UNLEASHED_ENABLE_WRITE_TOOLS=true`, `dryRun=false`, and `confirmUpload=true`
+- Default order status: `Parked`
+- Supported upload statuses: `Parked`, `Placed`
 
 ## Current tools
 
@@ -67,5 +81,6 @@ https://your-service.up.railway.app/mcp
 - `unleashed_get_product`
 - `unleashed_list_sales_orders`
 - `unleashed_get_sales_order`
+- `unleashed_create_purchase_order`
 
 Customer tools return business-safe fields by default. Contact/address fields are hidden unless the tool call explicitly requests them.
