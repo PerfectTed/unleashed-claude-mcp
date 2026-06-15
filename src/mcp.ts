@@ -623,7 +623,7 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
   warehouseName: z.string().trim().min(1).max(200).optional().describe("Warehouse name or hint used only to find candidate warehouse codes when warehouseCode is not known."),
   orderStatus: z.enum(["Parked", "Placed"]).default("Parked"),
   orderDate: REPORT_DATE.optional(),
-  deliveryDate: REPORT_DATE.optional(),
+  deliveryDate: REPORT_DATE.describe("Required purchase order delivery date in YYYY-MM-DD format. Do not pass null."),
   supplierRef: z.string().trim().max(500).optional(),
   comments: z.string().trim().max(1024).optional(),
   currencyCode: z.string().trim().length(3).optional(),
