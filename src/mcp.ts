@@ -800,6 +800,11 @@ async function inspectPurchaseOrderInput(
     }
   }
 
+  if (!input.deliveryDate) {
+    missing.push("deliveryDate");
+    questions.push("What delivery date should be used for this purchase order? Use YYYY-MM-DD format.");
+  }
+
   if (input.lines.length === 0) {
     missing.push("lines");
     questions.push("What products should be added to this purchase order?");
@@ -859,6 +864,7 @@ async function inspectPurchaseOrderInput(
       warehouseCode: input.warehouseCode ?? "",
       warehouseName: input.warehouseName ?? "",
       orderStatus: input.orderStatus,
+      deliveryDate: input.deliveryDate ?? "",
       supplierRef: input.supplierRef ?? "",
       lines: input.lines.map((line) => ({
         productCode: line.productCode ?? "",
@@ -875,6 +881,7 @@ async function inspectPurchaseOrderInput(
       "If supplierCode is missing, ask for a supplier name and search Unleashed before asking for a code.",
       "If warehouseCode is missing, ask for a warehouse name and search Unleashed before asking for a code.",
       "If productCode is missing, ask for the product name or product description and search Unleashed before asking for a code.",
+      "Confirm the purchase order deliveryDate is present in YYYY-MM-DD format before upload.",
       "When candidates are returned, ask in plain English which one the user means.",
       "Confirm each line has a selected product, orderQuantity, and unitPrice.",
       "Run this tool again with dryRun=true after the missing fields are filled.",
