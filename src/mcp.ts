@@ -620,6 +620,7 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
   supplierCode: z.string().trim().min(1).max(500).optional().describe("Exact Unleashed supplier code. If the user only gave a supplier name or vague hint, leave this blank and set supplierName so the tool can return candidates."),
   supplierName: z.string().trim().min(1).max(500).optional().describe("Supplier name or hint used only to find candidates when supplierCode is not known."),
   warehouseCode: z.string().trim().min(1).max(15).optional(),
+  warehouseName: z.string().trim().min(1).max(200).optional().describe("Warehouse name or hint used only to find candidate warehouse codes when warehouseCode is not known."),
   orderStatus: z.enum(["Parked", "Placed"]).default("Parked"),
   orderDate: OPTIONAL_DATE,
   deliveryDate: OPTIONAL_DATE,
@@ -643,7 +644,7 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
       discountRate: DISCOUNT_RATE,
       unitOfMeasureName: z.string().trim().max(20).optional()
     })
-  ).min(1)
+  ).default([])
 };
 
 type CreatePurchaseOrderInput = z.output<z.ZodObject<typeof CREATE_PURCHASE_ORDER_INPUT_SCHEMA>>;
@@ -748,17 +749,22 @@ async function inspectPurchaseOrderInput(
   const missing: string[] = [];
   const confirmations: Array<Record<string, unknown>> = [];
   const candidateLookups: Record<string, unknown> = {};
+  const lookupErrors: Record<string, string> = {};
   const questions: string[] = [];
 
   if (!input.supplierCode) {
     if (input.supplierName) {
       const suppliers = await findSupplierCandidates(unleashed, input.supplierName);
-      candidateLookups.supplierCandidates = suppliers;
-      if (suppliers.length > 0) {
+      candidateLookups.supplierCandidates = suppliers.candidates;
+      if (suppliers.error) {
+        lookupErrors.supplier = suppliers.error;
+        missing.push("supplierCode");
+        questions.push(`I could not search suppliers for "${input.supplierName}" because Unleashed returned an error. Ask for the exact supplier code or retry the lookup.`);
+      } else if (suppliers.candidates.length > 0) {
         confirmations.push({
           field: "supplierCode",
           question: `I found possible suppliers for "${input.supplierName}". Which one is the right supplier?`,
-          candidates: suppliers
+          candidates: suppliers.candidates
         });
       } else {
         missing.push("supplierName");
@@ -771,12 +777,32 @@ async function inspectPurchaseOrderInput(
   }
 
   if (!input.warehouseCode) {
-    missing.push("warehouseCode");
-    questions.push("Which warehouse should this purchase order go to?");
+    if (input.warehouseName) {
+      const warehouses = await findWarehouseCandidates(unleashed, input.warehouseName);
+      candidateLookups.warehouseCandidates = warehouses.candidates;
+      if (warehouses.error) {
+        lookupErrors.warehouse = warehouses.error;
+        missing.push("warehouseCode");
+        questions.push(`I could not search warehouses for "${input.warehouseName}" because Unleashed returned an error. Ask for the exact warehouse code or retry the lookup.`);
+      } else if (warehouses.candidates.length > 0) {
+        confirmations.push({
+          field: "warehouseCode",
+          question: `I found possible warehouses for "${input.warehouseName}". Which one should this purchase order go to?`,
+          candidates: warehouses.candidates
+        });
+      } else {
+        missing.push("warehouseName");
+        questions.push(`I could not find a warehouse match for "${input.warehouseName}". What warehouse name should I search for?`);
+      }
+    } else {
+      missing.push("warehouseName");
+      questions.push("Which warehouse should this purchase order go to?");
+    }
   }
 
   if (input.lines.length === 0) {
     missing.push("lines");
+    questions.push("What products should be added to this purchase order?");
   }
 
   for (const [index, line] of input.lines.entries()) {
@@ -785,12 +811,16 @@ async function inspectPurchaseOrderInput(
       const productSearch = line.productName ?? line.productHint;
       if (productSearch) {
         const products = await findProductCandidates(unleashed, productSearch);
-        candidateLookups[`${lineLabel}.productCandidates`] = products;
-        if (products.length > 0) {
+        candidateLookups[`${lineLabel}.productCandidates`] = products.candidates;
+        if (products.error) {
+          lookupErrors[`${lineLabel}.product`] = products.error;
+          missing.push(`${lineLabel}.productCode`);
+          questions.push(`I could not search products for "${productSearch}" because Unleashed returned an error. Ask for the exact product code or retry the lookup.`);
+        } else if (products.candidates.length > 0) {
           confirmations.push({
             field: `${lineLabel}.productCode`,
             question: `For "${productSearch}", which product do you mean?`,
-            candidates: products
+            candidates: products.candidates
           });
         } else {
           missing.push(`${lineLabel}.productName`);
@@ -827,6 +857,7 @@ async function inspectPurchaseOrderInput(
       supplierCode: input.supplierCode ?? "",
       supplierName: input.supplierName ?? "",
       warehouseCode: input.warehouseCode ?? "",
+      warehouseName: input.warehouseName ?? "",
       orderStatus: input.orderStatus,
       supplierRef: input.supplierRef ?? "",
       lines: input.lines.map((line) => ({
@@ -839,8 +870,10 @@ async function inspectPurchaseOrderInput(
       }))
     },
     candidateLookups,
+    lookupErrors,
     howToProceed: [
       "If supplierCode is missing, ask for a supplier name and search Unleashed before asking for a code.",
+      "If warehouseCode is missing, ask for a warehouse name and search Unleashed before asking for a code.",
       "If productCode is missing, ask for the product name or product description and search Unleashed before asking for a code.",
       "When candidates are returned, ask in plain English which one the user means.",
       "Confirm each line has a selected product, orderQuantity, and unitPrice.",
@@ -850,10 +883,17 @@ async function inspectPurchaseOrderInput(
   };
 }
 
+type LookupResult = {
+  candidates: Array<Record<string, unknown>>;
+  error?: string;
+};
+
 async function findProductCandidates(
   unleashed: UnleashedClient,
   search: string
-): Promise<Array<Record<string, unknown>>> {
+): Promise<LookupResult> {
+  const errors: string[] = [];
+
   try {
     const payload = await unleashed.get<UnleashedListResponse<{
       Guid?: string;
@@ -865,38 +905,130 @@ async function findProductCandidates(
       brief: true
     });
 
-    return (payload.Items ?? []).slice(0, 10).map((product) => ({
-      productCode: product.ProductCode,
-      productDescription: product.ProductDescription,
-      guid: product.Guid
-    }));
+    return { candidates: mapProductCandidates(payload.Items ?? []) };
   } catch (error) {
-    return [{ lookupError: error instanceof Error ? error.message : "Product lookup failed." }];
+    errors.push(error instanceof Error ? error.message : "Product lookup failed.");
   }
+
+  try {
+    const payload = await unleashed.get<UnleashedListResponse<{
+      Guid?: string;
+      ProductCode?: string;
+      ProductDescription?: string;
+    }>>("/Products", {
+      ...pagination(1, 10),
+      productDescription: search
+    });
+
+    return { candidates: mapProductCandidates(payload.Items ?? []) };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "Product description lookup failed.");
+  }
+
+  return {
+    candidates: [],
+    error: errors.join(" | ")
+  };
 }
 
 async function findSupplierCandidates(
   unleashed: UnleashedClient,
   search: string
-): Promise<Array<Record<string, unknown>>> {
+): Promise<LookupResult> {
   try {
-    const payload = await unleashed.get<UnleashedListResponse<{
+    const suppliers = await fetchLookupPages<{
       Guid?: string;
       SupplierCode?: string;
       SupplierName?: string;
-    }>>("/Suppliers", {
-      ...pagination(1, 10),
-      supplierName: search
-    });
+    }>(unleashed, "/Suppliers");
 
-    return (payload.Items ?? []).slice(0, 10).map((supplier) => ({
+    const candidates = suppliers.filter((supplier) =>
+      matchesLookup(search, supplier.SupplierName, supplier.SupplierCode)
+    );
+
+    return { candidates: candidates.slice(0, 10).map((supplier) => ({
       supplierCode: supplier.SupplierCode,
       supplierName: supplier.SupplierName,
       guid: supplier.Guid
-    }));
+    })) };
   } catch (error) {
-    return [{ lookupError: error instanceof Error ? error.message : "Supplier lookup failed." }];
+    return {
+      candidates: [],
+      error: error instanceof Error ? error.message : "Supplier lookup failed."
+    };
   }
+}
+
+async function findWarehouseCandidates(
+  unleashed: UnleashedClient,
+  search: string
+): Promise<LookupResult> {
+  try {
+    const warehouses = await fetchLookupPages<{
+      Guid?: string;
+      WarehouseCode?: string;
+      WarehouseName?: string;
+    }>(unleashed, "/Warehouses");
+
+    const candidates = warehouses.filter((warehouse) =>
+      matchesLookup(search, warehouse.WarehouseName, warehouse.WarehouseCode)
+    );
+
+    return { candidates: candidates.slice(0, 10).map((warehouse) => ({
+      warehouseCode: warehouse.WarehouseCode,
+      warehouseName: warehouse.WarehouseName,
+      guid: warehouse.Guid
+    })) };
+  } catch (error) {
+    return {
+      candidates: [],
+      error: error instanceof Error ? error.message : "Warehouse lookup failed."
+    };
+  }
+}
+
+async function fetchLookupPages<T>(
+  unleashed: UnleashedClient,
+  path: string
+): Promise<T[]> {
+  const items: T[] = [];
+  const pageSize = 200;
+  const maxPages = 10;
+
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    const payload = await unleashed.get<UnleashedListResponse<T>>(path, pagination(pageNumber, pageSize));
+    items.push(...(payload.Items ?? []));
+
+    const numberOfPages = payload.Pagination?.NumberOfPages;
+    if (!numberOfPages || pageNumber >= numberOfPages) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+function mapProductCandidates(products: Array<{
+  Guid?: string;
+  ProductCode?: string;
+  ProductDescription?: string;
+}>): Array<Record<string, unknown>> {
+  return products.slice(0, 10).map((product) => ({
+    productCode: product.ProductCode,
+    productDescription: product.ProductDescription,
+    guid: product.Guid
+  }));
+}
+
+function matchesLookup(search: string, name?: string, code?: string): boolean {
+  const terms = normalizeLookup(search).split(" ").filter(Boolean);
+  const haystack = normalizeLookup(`${name ?? ""} ${code ?? ""}`);
+
+  return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
+function normalizeLookup(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function buildPurchaseOrderPayload(input: ReadyPurchaseOrderInput): PurchaseOrderPayload {
