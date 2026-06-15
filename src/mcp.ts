@@ -925,6 +925,22 @@ async function findProductCandidates(
     errors.push(error instanceof Error ? error.message : "Product description lookup failed.");
   }
 
+  try {
+    const products = await fetchLookupPages<{
+      Guid?: string;
+      ProductCode?: string;
+      ProductDescription?: string;
+    }>(unleashed, "/Products", { brief: true });
+
+    const candidates = products.filter((product) =>
+      matchesLookup(search, product.ProductDescription, product.ProductCode)
+    );
+
+    return { candidates: mapProductCandidates(candidates) };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "Product fallback lookup failed.");
+  }
+
   return {
     candidates: [],
     error: errors.join(" | ")
@@ -989,14 +1005,18 @@ async function findWarehouseCandidates(
 
 async function fetchLookupPages<T>(
   unleashed: UnleashedClient,
-  path: string
+  path: string,
+  query: Record<string, string | number | boolean | undefined> = {}
 ): Promise<T[]> {
   const items: T[] = [];
   const pageSize = 200;
   const maxPages = 10;
 
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
-    const payload = await unleashed.get<UnleashedListResponse<T>>(path, pagination(pageNumber, pageSize));
+    const payload = await unleashed.get<UnleashedListResponse<T>>(path, {
+      ...pagination(pageNumber, pageSize),
+      ...query
+    });
     items.push(...(payload.Items ?? []));
 
     const numberOfPages = payload.Pagination?.NumberOfPages;
