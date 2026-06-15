@@ -73,7 +73,7 @@ Purchase order upload is the only write tool currently exposed.
 - Default order status: `Parked`
 - Supported upload statuses: `Parked`, `Placed`
 
-If required fields are missing or vague, the tool returns `needs_input` or `needs_confirmation` with a fillable form and candidate product/supplier matches. It should not guess supplier codes, warehouse codes, product codes, quantities, or prices.
+If required fields are missing or vague, the tool returns `needs_input` or `needs_confirmation` with plain-English questions, a fillable form, and candidate product/supplier matches. Employees do not need to know Unleashed codes; Claude should ask for product/supplier names, search Unleashed, then ask which candidate they mean. It should not guess supplier codes, warehouse codes, product codes, quantities, or prices.
 
 ## Current tools
 

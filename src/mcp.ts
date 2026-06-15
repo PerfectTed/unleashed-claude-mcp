@@ -748,24 +748,31 @@ async function inspectPurchaseOrderInput(
   const missing: string[] = [];
   const confirmations: Array<Record<string, unknown>> = [];
   const candidateLookups: Record<string, unknown> = {};
+  const questions: string[] = [];
 
   if (!input.supplierCode) {
-    missing.push("supplierCode");
     if (input.supplierName) {
       const suppliers = await findSupplierCandidates(unleashed, input.supplierName);
       candidateLookups.supplierCandidates = suppliers;
       if (suppliers.length > 0) {
         confirmations.push({
           field: "supplierCode",
-          question: `Which supplier code should be used for "${input.supplierName}"?`,
+          question: `I found possible suppliers for "${input.supplierName}". Which one is the right supplier?`,
           candidates: suppliers
         });
+      } else {
+        missing.push("supplierName");
+        questions.push(`I could not find a supplier match for "${input.supplierName}". What supplier name should I search for?`);
       }
+    } else {
+      missing.push("supplierName");
+      questions.push("What supplier name should I search for in Unleashed?");
     }
   }
 
   if (!input.warehouseCode) {
     missing.push("warehouseCode");
+    questions.push("Which warehouse should this purchase order go to?");
   }
 
   if (input.lines.length === 0) {
@@ -775,7 +782,6 @@ async function inspectPurchaseOrderInput(
   for (const [index, line] of input.lines.entries()) {
     const lineLabel = `lines[${index}]`;
     if (!line.productCode) {
-      missing.push(`${lineLabel}.productCode`);
       const productSearch = line.productName ?? line.productHint;
       if (productSearch) {
         const products = await findProductCandidates(unleashed, productSearch);
@@ -783,18 +789,26 @@ async function inspectPurchaseOrderInput(
         if (products.length > 0) {
           confirmations.push({
             field: `${lineLabel}.productCode`,
-            question: `For "${productSearch}", which exact Unleashed product code should be used?`,
+            question: `For "${productSearch}", which product do you mean?`,
             candidates: products
           });
+        } else {
+          missing.push(`${lineLabel}.productName`);
+          questions.push(`I could not find a product match for "${productSearch}". What product name should I search for?`);
         }
+      } else {
+        missing.push(`${lineLabel}.productName`);
+        questions.push(`What product name should I search for on line ${index + 1}?`);
       }
     }
 
     if (line.orderQuantity === undefined) {
       missing.push(`${lineLabel}.orderQuantity`);
+      questions.push(`What quantity is needed for line ${index + 1}?`);
     }
     if (line.unitPrice === undefined) {
       missing.push(`${lineLabel}.unitPrice`);
+      questions.push(`What unit price should be used for line ${index + 1}?`);
     }
   }
 
@@ -805,8 +819,9 @@ async function inspectPurchaseOrderInput(
   return {
     status: confirmations.length > 0 ? "needs_confirmation" : "needs_input",
     message:
-      "The purchase order is not upload-ready yet. Do not guess missing supplier, warehouse, product, quantity, or price fields.",
+      "The purchase order is not upload-ready yet. Ask for names first, search Unleashed for matches, then ask the user to confirm the exact match. Do not ask employees to memorize codes and do not guess missing supplier, warehouse, product, quantity, or price fields.",
     missing,
+    questions,
     confirmations,
     form: {
       supplierCode: input.supplierCode ?? "",
@@ -825,9 +840,10 @@ async function inspectPurchaseOrderInput(
     },
     candidateLookups,
     howToProceed: [
-      "Ask the user to confirm the exact supplierCode and warehouseCode.",
-      "For vague product text, present the candidate product codes and ask which one they mean.",
-      "Confirm each line has exact productCode, orderQuantity, and unitPrice.",
+      "If supplierCode is missing, ask for a supplier name and search Unleashed before asking for a code.",
+      "If productCode is missing, ask for the product name or product description and search Unleashed before asking for a code.",
+      "When candidates are returned, ask in plain English which one the user means.",
+      "Confirm each line has a selected product, orderQuantity, and unitPrice.",
       "Run this tool again with dryRun=true after the missing fields are filled.",
       "Only use dryRun=false and confirmUpload=true after the dry-run payload has been reviewed."
     ]
