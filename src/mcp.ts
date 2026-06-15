@@ -895,11 +895,11 @@ async function findProductCandidates(
   const errors: string[] = [];
 
   try {
-    const payload = await unleashed.get<UnleashedListResponse<{
+    const payload = await getWithLookupRetry<UnleashedListResponse<{
       Guid?: string;
       ProductCode?: string;
       ProductDescription?: string;
-    }>>("/Products", {
+    }>>(unleashed, "/Products", {
       ...pagination(1, 10),
       product: search,
       brief: true
@@ -911,11 +911,11 @@ async function findProductCandidates(
   }
 
   try {
-    const payload = await unleashed.get<UnleashedListResponse<{
+    const payload = await getWithLookupRetry<UnleashedListResponse<{
       Guid?: string;
       ProductCode?: string;
       ProductDescription?: string;
-    }>>("/Products", {
+    }>>(unleashed, "/Products", {
       ...pagination(1, 10),
       productDescription: search
     });
@@ -1013,7 +1013,7 @@ async function fetchLookupPages<T>(
   const maxPages = 10;
 
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
-    const payload = await unleashed.get<UnleashedListResponse<T>>(path, {
+    const payload = await getWithLookupRetry<UnleashedListResponse<T>>(unleashed, path, {
       ...pagination(pageNumber, pageSize),
       ...query
     });
@@ -1026,6 +1026,42 @@ async function fetchLookupPages<T>(
   }
 
   return items;
+}
+
+async function getWithLookupRetry<T>(
+  unleashed: UnleashedClient,
+  path: string,
+  query: Record<string, string | number | boolean | undefined>
+): Promise<T> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await unleashed.get<T>(path, query);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts || !isTransientLookupError(error)) {
+        throw error;
+      }
+
+      await sleep(250 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+function isTransientLookupError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /\b(403|408|409|425|429|500|502|503|504)\b/.test(error.message);
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function mapProductCandidates(products: Array<{
