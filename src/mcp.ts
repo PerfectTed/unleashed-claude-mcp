@@ -617,8 +617,9 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
   dryRun: z.boolean().default(true),
   confirmUpload: z.boolean().default(false),
   purchaseOrderGuid: GUID.optional(),
-  supplierCode: z.string().trim().min(1).max(500),
-  warehouseCode: z.string().trim().min(1).max(15),
+  supplierCode: z.string().trim().min(1).max(500).optional().describe("Exact Unleashed supplier code. If the user only gave a supplier name or vague hint, leave this blank and set supplierName so the tool can return candidates."),
+  supplierName: z.string().trim().min(1).max(500).optional().describe("Supplier name or hint used only to find candidates when supplierCode is not known."),
+  warehouseCode: z.string().trim().min(1).max(15).optional(),
   orderStatus: z.enum(["Parked", "Placed"]).default("Parked"),
   orderDate: OPTIONAL_DATE,
   deliveryDate: OPTIONAL_DATE,
@@ -630,9 +631,11 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
   discountRate: DISCOUNT_RATE,
   lines: z.array(
     z.object({
-      productCode: z.string().trim().min(1).max(100),
-      orderQuantity: z.number().finite().positive(),
-      unitPrice: MONEY,
+      productCode: z.string().trim().min(1).max(100).optional().describe("Exact Unleashed product code. Do not guess this from vague text; use productName or productHint instead."),
+      productName: z.string().trim().min(1).max(200).optional().describe("Product name from the user, used only to find candidate product codes."),
+      productHint: z.string().trim().min(1).max(200).optional().describe("Any vague product text from the user, such as 'match 021' or 'raspberry', used to find candidate product codes."),
+      orderQuantity: z.number().finite().positive().optional(),
+      unitPrice: MONEY.optional(),
       lineTax: MONEY.default(0),
       lineTotal: MONEY.optional(),
       deliveryDate: OPTIONAL_DATE,
@@ -644,6 +647,16 @@ const CREATE_PURCHASE_ORDER_INPUT_SCHEMA = {
 };
 
 type CreatePurchaseOrderInput = z.output<z.ZodObject<typeof CREATE_PURCHASE_ORDER_INPUT_SCHEMA>>;
+
+type ReadyPurchaseOrderInput = Omit<CreatePurchaseOrderInput, "supplierCode" | "warehouseCode" | "lines"> & {
+  supplierCode: string;
+  warehouseCode: string;
+  lines: Array<CreatePurchaseOrderInput["lines"][number] & {
+    productCode: string;
+    orderQuantity: number;
+    unitPrice: number;
+  }>;
+};
 
 type PurchaseOrderPayload = {
   Guid?: string;
@@ -692,7 +705,13 @@ function registerPurchaseOrderWriteTool(
       inputSchema: CREATE_PURCHASE_ORDER_INPUT_SCHEMA
     },
     async (input) => {
-      const payload = buildPurchaseOrderPayload(input);
+      const needsInput = await inspectPurchaseOrderInput(unleashed, input);
+      if (needsInput) {
+        return jsonResult(needsInput);
+      }
+
+      const readyInput = input as ReadyPurchaseOrderInput;
+      const payload = buildPurchaseOrderPayload(readyInput);
 
       if (input.dryRun) {
         return jsonResult({
@@ -722,7 +741,149 @@ function registerPurchaseOrderWriteTool(
   );
 }
 
-function buildPurchaseOrderPayload(input: CreatePurchaseOrderInput): PurchaseOrderPayload {
+async function inspectPurchaseOrderInput(
+  unleashed: UnleashedClient,
+  input: CreatePurchaseOrderInput
+): Promise<Record<string, unknown> | undefined> {
+  const missing: string[] = [];
+  const confirmations: Array<Record<string, unknown>> = [];
+  const candidateLookups: Record<string, unknown> = {};
+
+  if (!input.supplierCode) {
+    missing.push("supplierCode");
+    if (input.supplierName) {
+      const suppliers = await findSupplierCandidates(unleashed, input.supplierName);
+      candidateLookups.supplierCandidates = suppliers;
+      if (suppliers.length > 0) {
+        confirmations.push({
+          field: "supplierCode",
+          question: `Which supplier code should be used for "${input.supplierName}"?`,
+          candidates: suppliers
+        });
+      }
+    }
+  }
+
+  if (!input.warehouseCode) {
+    missing.push("warehouseCode");
+  }
+
+  if (input.lines.length === 0) {
+    missing.push("lines");
+  }
+
+  for (const [index, line] of input.lines.entries()) {
+    const lineLabel = `lines[${index}]`;
+    if (!line.productCode) {
+      missing.push(`${lineLabel}.productCode`);
+      const productSearch = line.productName ?? line.productHint;
+      if (productSearch) {
+        const products = await findProductCandidates(unleashed, productSearch);
+        candidateLookups[`${lineLabel}.productCandidates`] = products;
+        if (products.length > 0) {
+          confirmations.push({
+            field: `${lineLabel}.productCode`,
+            question: `For "${productSearch}", which exact Unleashed product code should be used?`,
+            candidates: products
+          });
+        }
+      }
+    }
+
+    if (line.orderQuantity === undefined) {
+      missing.push(`${lineLabel}.orderQuantity`);
+    }
+    if (line.unitPrice === undefined) {
+      missing.push(`${lineLabel}.unitPrice`);
+    }
+  }
+
+  if (missing.length === 0 && confirmations.length === 0) {
+    return undefined;
+  }
+
+  return {
+    status: confirmations.length > 0 ? "needs_confirmation" : "needs_input",
+    message:
+      "The purchase order is not upload-ready yet. Do not guess missing supplier, warehouse, product, quantity, or price fields.",
+    missing,
+    confirmations,
+    form: {
+      supplierCode: input.supplierCode ?? "",
+      supplierName: input.supplierName ?? "",
+      warehouseCode: input.warehouseCode ?? "",
+      orderStatus: input.orderStatus,
+      supplierRef: input.supplierRef ?? "",
+      lines: input.lines.map((line) => ({
+        productCode: line.productCode ?? "",
+        productName: line.productName ?? "",
+        productHint: line.productHint ?? "",
+        orderQuantity: line.orderQuantity ?? "",
+        unitPrice: line.unitPrice ?? "",
+        lineTax: line.lineTax ?? 0
+      }))
+    },
+    candidateLookups,
+    howToProceed: [
+      "Ask the user to confirm the exact supplierCode and warehouseCode.",
+      "For vague product text, present the candidate product codes and ask which one they mean.",
+      "Confirm each line has exact productCode, orderQuantity, and unitPrice.",
+      "Run this tool again with dryRun=true after the missing fields are filled.",
+      "Only use dryRun=false and confirmUpload=true after the dry-run payload has been reviewed."
+    ]
+  };
+}
+
+async function findProductCandidates(
+  unleashed: UnleashedClient,
+  search: string
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const payload = await unleashed.get<UnleashedListResponse<{
+      Guid?: string;
+      ProductCode?: string;
+      ProductDescription?: string;
+    }>>("/Products", {
+      ...pagination(1, 10),
+      product: search,
+      brief: true
+    });
+
+    return (payload.Items ?? []).slice(0, 10).map((product) => ({
+      productCode: product.ProductCode,
+      productDescription: product.ProductDescription,
+      guid: product.Guid
+    }));
+  } catch (error) {
+    return [{ lookupError: error instanceof Error ? error.message : "Product lookup failed." }];
+  }
+}
+
+async function findSupplierCandidates(
+  unleashed: UnleashedClient,
+  search: string
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const payload = await unleashed.get<UnleashedListResponse<{
+      Guid?: string;
+      SupplierCode?: string;
+      SupplierName?: string;
+    }>>("/Suppliers", {
+      ...pagination(1, 10),
+      supplierName: search
+    });
+
+    return (payload.Items ?? []).slice(0, 10).map((supplier) => ({
+      supplierCode: supplier.SupplierCode,
+      supplierName: supplier.SupplierName,
+      guid: supplier.Guid
+    }));
+  } catch (error) {
+    return [{ lookupError: error instanceof Error ? error.message : "Supplier lookup failed." }];
+  }
+}
+
+function buildPurchaseOrderPayload(input: ReadyPurchaseOrderInput): PurchaseOrderPayload {
   const lines = input.lines.map((line, index) => buildPurchaseOrderLine(line, index + 1));
   const subTotal = round2(lines.reduce((sum, line) => sum + line.LineTotal, 0));
   const taxTotal = round2(lines.reduce((sum, line) => sum + line.LineTax, 0));
@@ -748,7 +909,7 @@ function buildPurchaseOrderPayload(input: CreatePurchaseOrderInput): PurchaseOrd
 }
 
 function buildPurchaseOrderLine(
-  line: CreatePurchaseOrderInput["lines"][number],
+  line: ReadyPurchaseOrderInput["lines"][number],
   lineNumber: number
 ): PurchaseOrderPayloadLine {
   const lineTotal = line.lineTotal ?? line.orderQuantity * line.unitPrice * (1 - line.discountRate);
