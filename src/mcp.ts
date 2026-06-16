@@ -845,10 +845,6 @@ async function inspectPurchaseOrderInput(
       missing.push(`${lineLabel}.unitPrice`);
       questions.push(`What unit price should be used for line ${index + 1}?`);
     }
-    if (input.taxRate === undefined && line.lineTax === undefined) {
-      missing.push(`${lineLabel}.lineTax`);
-      questions.push(`What tax should be used for line ${index + 1}? Provide a header taxRate such as 0.2 for 20% VAT, or an explicit lineTax.`);
-    }
   }
 
   if (missing.length === 0 && confirmations.length === 0) {
@@ -886,7 +882,6 @@ async function inspectPurchaseOrderInput(
       "If warehouseCode is missing, ask for a warehouse name and search Unleashed before asking for a code.",
       "If productCode is missing, ask for the product name or product description and search Unleashed before asking for a code.",
       "Confirm the purchase order deliveryDate is present in YYYY-MM-DD format before upload.",
-      "Confirm tax is explicit: provide a header taxRate or explicit lineTax values so live Unleashed validation can reconcile line tax.",
       "When candidates are returned, ask in plain English which one the user means.",
       "Confirm each line has a selected product, orderQuantity, and unitPrice.",
       "Run this tool again with dryRun=true after the missing fields are filled.",
@@ -1100,7 +1095,7 @@ function normalizeLookup(value: string): string {
 }
 
 function buildPurchaseOrderPayload(input: ReadyPurchaseOrderInput): PurchaseOrderPayload {
-  const lines = input.lines.map((line, index) => buildPurchaseOrderLine(line, index + 1, input.taxRate));
+  const lines = input.lines.map((line, index) => buildPurchaseOrderLine(line, index + 1));
   const subTotal = round2(lines.reduce((sum, line) => sum + line.LineTotal, 0));
   const taxTotal = lines.some((line) => line.LineTax !== undefined)
     ? round2(lines.reduce((sum, line) => sum + (line.LineTax ?? 0), 0))
@@ -1128,11 +1123,9 @@ function buildPurchaseOrderPayload(input: ReadyPurchaseOrderInput): PurchaseOrde
 
 function buildPurchaseOrderLine(
   line: ReadyPurchaseOrderInput["lines"][number],
-  lineNumber: number,
-  taxRate: number | undefined
+  lineNumber: number
 ): PurchaseOrderPayloadLine {
   const lineTotal = line.lineTotal ?? line.orderQuantity * line.unitPrice * (1 - line.discountRate);
-  const lineTax = line.lineTax ?? (taxRate === undefined ? undefined : lineTotal * taxRate);
 
   return omitUndefined({
     LineNumber: lineNumber,
@@ -1140,7 +1133,7 @@ function buildPurchaseOrderLine(
     OrderQuantity: line.orderQuantity,
     UnitPrice: line.unitPrice,
     LineTotal: round2(lineTotal),
-    LineTax: lineTax === undefined ? undefined : round2(lineTax),
+    LineTax: line.lineTax === undefined ? undefined : round2(line.lineTax),
     DiscountRate: line.discountRate,
     DeliveryDate: line.deliveryDate,
     Comments: line.comments,
