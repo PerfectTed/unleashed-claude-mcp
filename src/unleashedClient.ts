@@ -110,5 +110,10 @@ function formatApiError(status: number, payload: unknown): string {
     return `Unleashed API returned ${status}: ${String(payload.message)}`;
   }
 
+  if (payload !== undefined) {
+    const detail = JSON.stringify(payload);
+    return `Unleashed API returned ${status}: ${detail.length > 1000 ? `${detail.slice(0, 1000)}...` : detail}`;
+  }
+
   return `Unleashed API returned ${status}.`;
 }
